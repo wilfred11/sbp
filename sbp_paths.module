@@ -110,10 +110,10 @@ function sbp_paths_sbp_details($id, $environment, $keys = NULL) {
   }
 
   // Basic page info
-
+  $snippet_title_no_token = token_replace($item->title);
   $ret = array(
     'type' => $item->page_type,
-    'title' => search_by_page_strip_tags($item->title, $environment),
+    'title' => search_by_page_strip_tags($snippet_title_no_token, $environment),
   );
 
   // Snippet -- DB either stores "yes", "no", or a custom snippet to use
@@ -127,7 +127,8 @@ function sbp_paths_sbp_details($id, $environment, $keys = NULL) {
   }
   elseif ($code != 'no' && $keys) {
     // User-supplied custom snippet
-    $ret['snippet'] = search_by_page_strip_tags($item->snippet, $environment);
+    $snippet_no_token = token_replace($item->snippet);
+    $ret['snippet'] = search_by_page_strip_tags($snippet_no_token, $environment);
   }
 
   return $ret;
@@ -205,11 +206,43 @@ function sbp_paths_menu() {
     'access arguments' => array('administer search by page'),
   );
 
+  $items['admin/config/search/search_by_page/edit/%/pagemanager-paths/edit'] = array(
+    'title' => 'Edit pagemanager path',
+    'type' => MENU_CALLBACK,
+    'page callback' => '_sbp_paths_edit_pm_path',
+    'page arguments' => array(5),
+    'access arguments' => array('administer search by page'),
+  );
+  
   $items['admin/config/search/search_by_page/edit/%/paths/add'] = array(
     'title' => 'Add path',
     'type' => MENU_CALLBACK,
     'page callback' => '_sbp_paths_edit',
+    'page arguments' => array('sbp_paths_delete_confirm', 5),
+    'access arguments' => array('administer search by page'),
+  );
+
+  $items['admin/config/search/search_by_page/edit/%/pagemanager-paths/add/all'] = array(
+    'title' => 'Bulk insert pagemanager paths',
+    'type' => MENU_CALLBACK,
+    'page callback' =>  'sbp_paths_add_all',
     'page arguments' => array(5),
+    'access arguments' => array('administer search by page'),
+  );
+  
+  $items['admin/config/search/search_by_page/edit/%/pagemanager-paths/add/all/confirm'] = array(
+    'title' => 'Bulk insert pagemanager paths',
+    'type' => MENU_CALLBACK,
+    'page callback' =>  'drupal_get_form',
+    'page arguments' => array('sbp_paths_add_all_confirm', 5),
+    'access arguments' => array('administer search by page'),
+  );
+  
+  $items['admin/config/search/search_by_page/edit/%/pagemanager-paths/delete'] = array(
+    'title' => 'Delete pagemanager path',
+    'type' => MENU_CALLBACK,
+    'page callback' =>  'drupal_get_form',
+    'page arguments' => array('sbp_paths_pm_page_delete_confirm', 5),
     'access arguments' => array('administer search by page'),
   );
 
@@ -300,6 +333,7 @@ function _sbp_paths_list_page($environment) {
     array('data' => t('Operations'),
       'colspan' => 2));
 
+	  
   $rows = array();
   foreach ($result as $data) {
     $rows[] = array(
@@ -311,6 +345,42 @@ function _sbp_paths_list_page($environment) {
   }
 
   $output .= theme('table', array('header' => $headers, 'rows' => $rows));
+  $output .='</br>';
+  $output .= 'Page manager pages not yet indexed';
+  
+    // Link to add a new path
+  $basepath = 'admin/config/search/search_by_page/edit/' . $environment . '/pagemanager-paths/';
+ // $basepath_add = 'admin/config/search/search_by_page/edit/' . $environment . '/pagemanager-paths/add/';
+  $output .= '<p>' .
+     l(t('Add valid pagemanager paths'),
+      $basepath . 'add/all') .
+    '</p>' . "\n";
+	
+  $rows_pm_pages=array();
+  // get pm pages, already existing paths will be omitted
+
+  $rows_pm_pages=  _sbp_paths_get_pm_pages($environment);
+  $rows_pm_with_links = array();
+  $count=0;
+  
+  foreach ($rows_pm_pages as $row) {
+    $rows_pm_with_links[] = array(
+      check_plain($row['page_path']),
+      check_plain($row['title']),
+	  check_plain($row['snippet']),
+      l(t('edit'), $basepath . 'edit/' .$count),
+      l(t('delete'), $basepath . 'delete/' .$count),
+	  );
+  	  $count++;
+  }
+  
+ //  sbp_paths_get_pages_metatags_from_page_manager($names_urls)
+  
+  $headers_pm_pages = array(t('Path'), t('Part of meta title'), t('Meta description'),
+    array('data' => t('Operations'),
+      'colspan' => 2));
+  
+  $output .= theme('table', array('header' => $headers_pm_pages, 'rows' =>  $rows_pm_with_links));
 
   $output .= theme('pager', array('tags' => NULL));
   return $output;
@@ -334,16 +404,32 @@ function _sbp_paths_edit($environment, $pid = 0) {
 }
 
 /**
+ * Edits pagemanager path.
+ */
+function _sbp_paths_edit_pm_path($environment, $pmp_id ) {
+	$values=array();
+	$values = _sbp_paths_get_pm_page($pmp_id, $environment);
+	$values['pmp_id'] = $pmp_id;
+	$values['pm_path'] = TRUE;
+	$values['environment']=$environment;
+    return drupal_get_form('sbp_paths_edit_form',array('values' => $values), TRUE);
+}
+
+/**
  * Returns a form for editing a path item.
  *
  * @ingroup forms
  * @see sbp_paths_edit_form_submit()
+ * @pagemanager path or other
  */
-function sbp_paths_edit_form($form, &$form_state, $edit = array()) {
+function sbp_paths_edit_form($form, &$form_state, $edit = array(), $pm_path = FALSE) {
   global $language;
-
+  if ($pm_path==1) {
+	$edit=$edit['values'];
+	$edit['pm_path']=$pm_path;
+	$edit['role']=1;
+  }
   $edit = array_merge(array('pid' => 0, 'page_path' => '', 'title' => '', 'page_type' => 'Page', 'snippet' => 'yes', 'environment' => 0, 'role' => DRUPAL_ANONYMOUS_RID, 'languages' => array()), $edit);
-
   $edit['environment'] = intval($edit['environment']);
 
   $form['path'] = array(
@@ -355,13 +441,18 @@ function sbp_paths_edit_form($form, &$form_state, $edit = array()) {
     '#field_prefix' => search_by_page_path_field_prefix(),
     '#required' => TRUE,
   );
+  
+  $form[$module]['token_help']['help'] = array(
+  		'#theme' => 'token_tree',
+  		'#token_types' => array($settings->token_type),
+  );
 
   $form['title'] = array(
     '#type' => 'textfield',
     '#title' => t('Title of page'),
     '#default_value' => $edit['title'],
     '#size' => 45,
-    '#description' => t('Title to display in search results for this page'),
+    '#description' => t('Title to display in search results for this page. You can use a token'),
     '#required' => TRUE,
   );
 
@@ -380,7 +471,7 @@ function sbp_paths_edit_form($form, &$form_state, $edit = array()) {
     '#default_value' => $edit['snippet'],
     '#cols' => 45,
     '#rows' => 5,
-    '#description' => t('Enter "yes" (without the quotes, in English) to show a "snippet" of this page in search results, extracted from the page (it should show a portion of the page that contains the search results). Enter "no" (without the quotes, in English) to omit the snippet entirely. Or, enter any other text to use that custom text as the snippet for search results display.'),
+    '#description' => t('Enter "yes" (without the quotes, in English) to show a "snippet" of this page in search results, extracted from the page (it should show a portion of the page that contains the search results). Enter "no" (without the quotes, in English) to omit the snippet entirely. Or, enter any other text to use that custom text as the snippet for search results display0. You can use tokens'),
     '#required' => TRUE,
   );
 
@@ -419,22 +510,43 @@ function sbp_paths_edit_form($form, &$form_state, $edit = array()) {
     $form['submit'] = array('#type' => 'submit', '#value' => t('Update indexed page'));
   }
   else {
-    $form['submit'] = array('#type' => 'submit', '#value' => t('Create new indexed page'));
+	  if(!$pm_path) {
+		  $form['submit'] = array('#type' => 'submit', '#value' => t('Create new indexed page'));
+	  } else {
+		 $form['submit'] = array('#type' => 'submit', '#value' => t('Submit changes to pagemanager page list')); 
+	  }
   }
 
   $form['submit']['#weight'] = 5;
 
   $form['environment'] = array('#type' => 'value', '#value' => $edit['environment']);
+  
 
-  $form['cancel'] = array(
+  if (!$pm_path) {
+    $form['cancel'] = array(
     '#type' => 'markup',
     '#markup' => "<p>" . l(t('Cancel'),
       'admin/config/search/search_by_page/edit/' . $edit['environment'] . '/paths') . "</p>",
     '#weight' => 6,
   );
-
+  } else {
+	$form['cancel'] = array(
+    '#type' => 'markup',
+    '#markup' => "<p>" . l(t('Cancel'),
+      'admin/config/search/search_by_page/edit/' . $edit['environment'] . '/pagemanager-paths') . "</p>",
+    '#weight' => 6,
+  );
+  }
+  $form['pmp_id'] = array(
+  '#type' => 'hidden',
+  '#value' => $edit['pmp_id'],
+);
+ $form['pm_path'] = array(
+  '#type' => 'hidden',
+  '#value' => $edit['pm_path'],
+);
   return $form;
-}
+ }
 
 /**
  * Submit callback for sbp_paths_edit_form().
@@ -442,8 +554,12 @@ function sbp_paths_edit_form($form, &$form_state, $edit = array()) {
  * Adds/edits the path to be indexed, and updates database of paths.
  */
 function sbp_paths_edit_form_submit($form, &$form_state) {
-
   $vals = $form_state['values'];
+  if ($vals['pm_path']) {
+    $envid = intval($vals['environment']);
+    sbp_paths_set_pm_paths_path($vals);
+  } else {
+  $ll=language_list($field = 'langcode');
   $langs = serialize($vals['languages']);
   $envid = intval($vals['environment']);
 
@@ -479,14 +595,19 @@ function sbp_paths_edit_form_submit($form, &$form_state) {
         ))
       ->execute();
   }
-
+  }
   // Update the translation strings
-  _sbp_paths_update_translation($vals);
+  if (!$pm_path) {
+    _sbp_paths_update_translation($vals);
+  }
 
-  // Go back to the paths list
-
-  drupal_set_message(t('The page to index has been saved'));
-  $form_state['redirect'] = 'admin/config/search/search_by_page/edit/' . $envid . '/paths';
+  if (!$pm_path) {
+	// Go back to the paths list
+    drupal_set_message(t('The page to index has been saved'));
+    $form_state['redirect'] = 'admin/config/search/search_by_page/edit/' . $envid . '/paths';
+  } else {
+    $form_state['redirect'] = 'admin/config/search/search_by_page/edit/' . $envid . '/paths';
+  }
 }
 
 /**
@@ -533,8 +654,8 @@ function sbp_paths_delete_confirm_submit($form, &$form_state) {
   $environment = intval($form_state['values']['environment']);
   search_by_page_force_remove('sbp_paths', $pid, $environment);
 
+  	unset($_SESSION['sbp_paths']['pm_paths'][$values['environment']]);
   // Go back to paths page
-
   $form_state['redirect'] = 'admin/config/search/search_by_page/edit/' . $environment . '/paths';
 }
 
@@ -566,4 +687,299 @@ function _sbp_paths_update_translation($vals) {
       i18n_string_update($code . 'snippet', $vals['snippet']);
     }
   }
+}
+
+/**
+ * Gets pagemanager and combines them with their metatags
+ *
+ * @param $environment
+ *   
+ */
+function _sbp_paths_get_pm_pages($environment) {
+  $pm_pages = array();
+  if(!isset($_SESSION['sbp_paths']['pm_paths'][$environment])) {
+	$_SESSION['sbp_paths'] = array();
+	$_SESSION['sbp_paths']['pm_paths'][$environment] = array();
+  
+	$existing_paths = get_sbp_paths($environment);
+    $names_urls=array();
+    $names_urls = get_page_manager_pages_entries($existing_paths);	
+    $pm_pages = _sbp_paths_get_pages_metatags_from_page_manager($names_urls);
+    $_SESSION['sbp_paths']['pm_paths'][$environment] = $pm_pages;
+  } else {
+	$pm_pages = $_SESSION['sbp_paths']['pm_paths'][$environment];
+  }
+  return $pm_pages;
+}
+
+/**
+ * Get page urls from page manager excluding already existing paths in sbp_paths table
+ * Auxilliary function for _sbp_paths_get_pm_pages
+ *
+ * @param $environment
+ *   
+ */
+function get_page_manager_pages_entries($existing_paths) {
+   $query = db_select('page_manager_pages','pmp')
+      ->fields('pmp')
+	  ->orderBy('name')
+      ->execute()
+	  ->fetchAll();
+	  foreach ($existing_paths as $row) {
+		  foreach ($query as $key => $row1) {
+			 if($row->page_path==$row1->path) {
+				 unset($query[$key]);
+			 }
+		  }
+	  }
+	  return array_values($query);
+ }
+ 
+ /**
+ * Gets metatag description and titel from panel pages
+ * Auxilliary function for _sbp_paths_get_pm_pages
+ * @param $names_urls
+ *    Associative array of information from sbpp_path table.
+ */
+function _sbp_paths_get_pages_metatags_from_page_manager($names_urls) {
+	$langs = serialize($vals['languages']);
+	$rows_to_be_added=array();
+	$page_panels=array();
+	$languages = locale_language_list('langcode');
+	$lcodes= array_keys( $languages);
+	foreach ($lcodes as $lcode) {
+	 $languages[$lcode]=$lcode;
+	}
+	foreach ($names_urls as $row)  {
+		$page_panels[]="page_".$row->name."__panel";
+	}
+
+	ctools_include('page', 'page_manager', 'plugins/tasks');
+	ctools_include('page_manager.admin', 'page_manager', '');
+	ctools_include('export');
+	
+	$tasks = page_manager_get_tasks_by_type('page');
+	$page_types = array();
+	foreach ($tasks as $task) {
+		$task_pages = page_manager_load_task_handlers($task); 
+		foreach ($task_pages as $row1) {
+			if(isset($row1)) {
+			$row1->name;
+			$value = $row1->name;
+			$key=null;
+			$key = array_search($value,$page_panels);
+			$row_to_be_added=array();
+			  if(strlen ($key)>0) {
+				$meta=array();
+				$meta=$row1->conf['metatag_panels']['metatags'];
+				$meta1=	$row1->conf['metatag_panels'];
+				$row_to_be_added['page_path']=$names_urls[$key]->path;
+				$long_title=$meta['title']['value'];
+				$short_title = substr($long_title, 0, strpos($long_title, '|'));
+				$row_to_be_added['title']=$short_title;
+				$row_to_be_added['snippet']=$meta['description']['value'];
+				$row_to_be_added['page_type']='Page';
+				$row_to_be_added['languages']=$languages;
+				$row_to_be_added['role']=1;
+				$key=null;
+				$rows_to_be_added[]=$row_to_be_added;
+			}
+		  }
+		}
+   }
+   return $rows_to_be_added;
+ }
+ 
+  /**
+ * Gets pages in sbp_path table
+ * Auxilliary function for _sbp_paths_get_pm_pages
+ * @param $environment
+ *    Associative array of information from sbpp_path table.
+ */
+ function get_sbp_paths($environment) {
+  $query = db_select('sbpp_path', 'p')
+    ->extend('PagerDefault');
+  $query->addField('p', 'pid');
+  $query->addField('p', 'page_path');
+  $query->addField('p', 'title');
+  $query->condition('environment', $environment)
+    ->limit(50)
+    ->orderBy('page_path');
+	  $result = $query->execute()->fetchAll();
+	return $result;
+ }
+ 
+
+// gets values from a pm page item from session
+function _sbp_paths_get_pm_page($key,$environment) {
+  $pm_pages=array();
+  //$pm_pages =	 _sbp_paths_get_pm_pages($environment);
+  $pm_pages = $_SESSION['sbp_paths']['pm_paths'][$environment];
+  return $pm_pages[$key];
+}
+
+// unused and obsolete
+function _sbp_paths_delete_pm_page($key, $environment) {
+  $pm_pages = array();
+  $pm_pages=_sbp_paths_get_pm_pages($environment);
+  unset($pm_pages[$key]);
+  $_SESSION['sbp_paths']['pm_paths'][$environment] = array_values($pm_pages);
+}
+
+ 
+  /**
+ * Sets edited page in pagemanger page array
+ * Auxilliary function for _sbp_paths_get_pm_pages
+ * @param $values
+ *    Associative array of edited information 
+ */
+ function sbp_paths_set_pm_paths_path($values) {
+  $pmp_id = $values['pmp_id'];
+  $values['page_path']=$values['path'];
+  unset($values['path']);
+  $pm_pages = $_SESSION['sbp_paths']['pm_paths'][$values['environment']];
+  $pm_pages[$pmp_id] = $values;
+  $_SESSION['sbp_paths']['pm_paths'][$values['environment']] = $pm_pages;
+}
+
+
+  /**
+ * Menu callback to list valid pagemanager pages and ask to confirm submision
+ * 
+ * @param $environment
+ *  
+ */
+ function sbp_paths_add_all($environment, $pid) {
+  $environment = intval($environment);
+  $basepath = 'admin/config/search/search_by_page/edit/' . $environment . '/pagemanager-paths/add/';
+  $rows_pm_paths = array();
+  $headers_pm_pages = array();
+  $rows_pm_paths = $_SESSION['sbp_paths']['pm_paths'][$environment];
+  $rows_to_be_submitted = array();
+  $rows_pm = array();
+  $output = '';
+  $output .= '<p>' . t('This page allows you to bulk add pagemanager pages on your site to be indexed by the Search by Page module in this environment.') . '</p>' . "\n";
+  
+  foreach ($rows_pm_paths as $row) {
+   if (strlen($row['title'])>0 && strlen($row['snippet'])>0 && strlen($row['snippet'])>0 && strlen($row['page_path'])>0 ) {
+    $rows_pm[] = array(
+      check_plain($row['page_path']),
+      check_plain($row['title']),
+	  check_plain($row['snippet']),
+	  );
+	$rows_to_be_submitted[] = $row;
+	}
+  }
+  $headers_pm_pages = array(t('Path'), t('Title'), t('Meta description'),);
+  $output .= theme('table', array('header' => $headers_pm_pages, 'rows' =>  $rows_pm));
+  $output .= theme('pager', array('tags' => NULL));
+  
+  $basepath = 'admin/config/search/search_by_page/edit/'.$environment .'/pagemanager-paths/add/all/confirm';
+	
+	$output .= drupal_render(drupal_get_form('sbp_paths_add_all_confirm', array('values' => $rows_to_be_submitted), TRUE));
+   return $output;  
+ } 
+ 
+ 
+ /**
+ * Callback for sbp_paths_add_all_confirm().
+ *
+ * Asks for confirmation to add the valid pagemanager paths to be indexed.
+ */
+ function sbp_paths_add_all_confirm($form, &$form_state, $rows_to_be_submitted, $environment) {
+	$environment = intval($environment); 
+	$form['saved_value_1'] = array(
+    '#type' => 'value',
+    '#value' => $rows_to_be_submitted,
+    );
+	 $form['saved_value_2'] = array(
+    '#type' => 'value',
+    '#value' => $environment,
+    );
+
+    $form['submit'] = array('#type' => 'submit', '#value' => t('Add all these paths'));
+    $form['cancel'] = array(
+    '#type' => 'markup',
+    '#markup' => "<p>" . l(t('Cancel'),
+      'admin/config/search/search_by_page/edit/' . $environment . '/paths') . "</p>",
+    '#weight' => 6,
+    );
+
+  return $form;
+}
+
+/**
+ * Submit callback for sbp_paths_add_all_confirm().
+ *
+ * Adds the valid pagemanager paths to be indexed to sbp_path table
+ */
+function sbp_paths_add_all_confirm_submit($form, &$form_state) {
+	$saved_value_1 = array();
+	$environment=$form_state['values']['saved_value_2'];
+	$rows=$form_state['values']['saved_value_1']['values'];
+	$environment = intval($environment); 
+	foreach($rows as $vals) { 
+	if (isset($vals['page_type'])) {
+		$vals['type']=$vals['page_type'];
+	}
+      db_insert('sbpp_path')
+		  ->fields(array(
+			  'environment' => $environment,
+			  'page_path' => $vals['page_path'],
+			  'title' => $vals['title'],
+			  'page_type' => $vals['type'],
+			  'snippet' => $vals['snippet'],
+			  'role' => $vals['role'],
+			  'languages' => serialize($vals['languages']),
+			))
+		  ->execute();
+	}
+	drupal_set_message(t('The form has been submitted.'));
+	unset($_SESSION['sbp_paths']['pm_paths'][$environment]);
+	$form_state['redirect'] = 'admin/config/search/search_by_page/edit/' . $environment . '/paths';
+}
+
+
+/**
+ * Returns a form confirming deletion a path to be indexed.
+ *
+ * @ingroup forms
+ * @see sbp_paths_delete_confirm_submit()
+ */
+function sbp_paths_pm_page_delete_confirm($form, &$form_state, $environment, $pmp_id) {
+  $environment = intval($environment);
+  $pmp_id = intval($pmp_id);
+  $form['pmp_id'] = array('#type' => 'value', '#value' => $pmp_id);
+  $form['environment'] = array('#type' => 'value', '#value' => $environment);
+  $item = $_SESSION['sbp_paths']['pm_paths'][$environment][$pmp_id];
+  unset($_SESSION['sbp_paths']['pm_paths'][$environment][$pmp_id]);
+
+  return confirm_form($form,
+      t('Are you sure you want to delete %path from pagemanager pages from this environment?',
+        array('%path' => $item['page_path'])),
+    'admin/config/search/search_by_page/edit/' . $environment . '/pagemanager-paths');
+}
+
+/**
+ * Submit callback for sbp_paths_delete_confirm().
+ *
+ * Actually deletes the path.
+ */
+function sbp_paths_pm_page_delete_confirm_submit($form, &$form_state) {
+  if (!$form_state['values']['confirm']) {
+    return;
+  }
+
+  $pmp_id = $form_state['values']['pmp_id'];
+  if (!$pmp_id) {
+    return;
+  }
+
+  $environment = intval($form_state['values']['environment']);
+
+  unset($_SESSION['sbp_paths']['pm_paths'][environment][$pmp_id]);
+  $pm_paths = array_values($_SESSION['sbp_paths']['pm_paths'][$environment]);
+  $_SESSION['sbp_paths']['pm_paths'][$environment] = $pm_paths;
+  // Go back to paths page
+  $form_state['redirect'] = 'admin/config/search/search_by_page/edit/' . $environment . '/paths';
 }
